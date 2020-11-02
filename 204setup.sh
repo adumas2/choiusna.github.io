@@ -1,0 +1,809 @@
+#!/usr/bin/env bash
+
+# SI204 setup script
+# This massive and wonderful script downloads everything necessary
+# to get your VM (or any Linux machine) in tip-top shape for
+# maximal SI204 enjoyment.
+# Dr. Roche, January 2017 and August 2020
+# Adapted by Dr. Choi, 2021
+
+set -euo pipefail
+shopt -s nullglob
+umask 066
+
+# must have this script and the tarball available under dl_url
+dl_url="https://choiusna.github.io/"
+
+# private key file for SSH authentication
+prikey="$HOME/.ssh/id_ed25519"
+pubkey=$prikey.pub
+
+# debian packages to install
+base_pkgs=(git jq curl coreutils diffutils dconf-cli openssh-client node-json5)
+extra_pkgs=(clang bash-doc trash-cli moreutils gcc g++ gitk vim-gtk3 emacs valgrind gdb x11-utils geany make lilyterm)
+
+# extra launchers to add to the top panel
+# each should corespond to a /usr/share/applications/XXX.desktop file
+tolaunch=(gnome-terminal google-chrome gvim emacs24 atom gedit)
+
+# I shouldn't say what this is.
+cs2='5fded64ff49569d1a5f'
+cs1='1ea69bcca39e02f99621d'
+
+# tarball structure:
+# /checksums    file with md5 checksums for OLD versions
+# /skel/        folder containing the actual files
+tarball_url="$dl_url/files.tar"
+
+# make temp dir and remember to remove it
+scratch=$(mktemp --directory --tmpdir 204setup.XXXXXXXX)
+function cleanup {
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
+
+# check the host type, either vm, wsl, or lab
+if [[ $(hostname) == 'ubuntu' ]]; then
+  hosttype=vm
+elif grep -iq 'microsoft\|wsl' /proc/version; then
+  hosttype=wsl
+else
+  hosttype=lab
+fi
+
+checknew=true # by default, check for new versions of this script
+errexit=1 # by default, exit with 1 on error
+if [[ $# -ge 1 && $1 == d ]]; then
+  echo "Script successfully downloaded"
+  errexit=0 # exit with status 0 even if error
+  checknew=false
+  shift
+elif [[ $# -ge 1 && $1 == r ]]; then
+  echo "Setup script updated and re-downloaded"
+  checknew=false
+  shift
+fi
+
+if [[ $# -ge 1 ]]; then
+  arg=$1
+else
+  arg=""
+fi
+
+if [[ -n $arg && ! $arg =~ ^[swgfbaki]*$ ]]; then
+  echo "Usage: $0 [command]"
+  echo "Command can be blank to do everything, or a combination of:"
+  echo "  w: set up symlink dirs for WSL"
+  echo "  k: generate SSH keypair"
+  echo "  g: setup si204 git directory"
+  echo "  f: download files and check for updates"
+  echo "  b: fix default bashrc"
+  echo "  a: fix application options and launchers"
+  echo "  i: install software packages"
+  exit 0
+fi
+
+# make this script executable
+scname=$(readlink -f "$0")
+chmod +x "$scname"
+
+# usage: checkfile filename homedir skeldir sumsfile
+# checks a single file and copies it if necessary
+function checkfile {
+  filename=$1
+  homedir=$2
+  skeldir=$3
+  sumsfile=$4
+  copyit=false
+  pushd "$homedir" >/dev/null
+  if [[ ! -e $filename ]]; then
+    # if the file doesn't exist, always copy it
+    copyit=true
+  elif ! cmp -s "$filename" "$skeldir/$filename"; then
+    # if the file exists and is different than the downloaded version...
+    sumline=$(md5sum "$filename")
+    if grep -qFx "$sumline" "$sumsfile"; then
+      # if the existing version is in the checksums file, overwrite it
+      copyit=true
+    else
+      # otherwise, don't do it
+      echo "  warning: not overwriting $filename; maybe you changed it yourself?"
+      echo "           (if you want the new version, delete $filename and then re-run this command.)"
+      copyit=false
+    fi
+  fi
+  if $copyit; then
+    echo "  copying file $filename"
+    mkdir -p "$(dirname "$filename")"
+    [[ -e $filename ]] && cp "$filename" "$filename.bak"
+    cp "$skeldir/$filename" "$filename"
+  fi
+  popd >/dev/null
+  return 0
+}
+
+
+####### FUNCTION DEFINITIONS
+
+# does an apt-update and installs the base-level packages
+function getpacks {
+  # first check if they are already installed
+  toinst=()
+  for pkg in "$@"; do
+    if ! dpkg -s "$pkg" 2>/dev/null | grep -q '^Status.*installed'; then
+      toinst+=( "$pkg" )
+    fi
+  done
+  if [[ ${#toinst[@]} -eq 0 ]]; then
+    # everything already installed, hooray
+    return 0
+  fi
+  echo
+  echo "Installing packages: ${toinst[@]}"
+  echo
+  echo "If this is your first time and there are many packages to install,"
+  echo "this could take a few minutes. As long as you see output scolling"
+  echo "by, it's working!"
+  echo
+  echo "If you are propted for a password next, it is for your"
+  echo "WSL/Ubuntu or virtual machine password, the non-secure one that"
+  echo "you picked the first time you used WSL or your VM."
+  read -n1 -p "Hit ENTER to continue"
+  echo
+  if ! sudo apt update || ! sudo apt install -y "${toinst[@]}"; then
+    return 1
+  fi
+  echo
+  return 0
+}
+
+# usage: checkall homedir skeldir sumsfile
+# runs checkfile for every file in skeldir
+function checkall {
+  homedir=$1
+  skeldir=$2
+  sumsfile=$3
+  echo
+  echo "Checking files for updates..."
+  exec 4< <(find "$skeldir" -type f)
+  while read -u4 fullname; do
+    fname=${fullname#$skeldir/}
+    if ! checkfile "$fname" "$homedir" "$skeldir" "$sumsfile"; then
+      echo "ERROR: some problem checking file $fname"
+      echo "You should report this to your instructor!"
+      echo "Soldiering on with the rest..."
+      popd >/dev/null || true
+    fi
+  done
+  exec 4<&-
+  echo "done checking files"
+  return 0
+}
+
+# usage sshkey [hostname]
+# generates a public/private ssh key file if not already present
+# if a new key is generated, it's copied to the given host
+function sshkey {
+  mkdir -p -m700 "$HOME/.ssh"
+  if [[ ! -e $prikey ]]; then
+    echo
+    echo "Generating public/private SSH key pair..."
+    ssh-keygen -f "$prikey" -t ed25519 -N '' -q
+    if [[ -e "$pubkey" ]]; then
+      echo "success!"
+    else
+      echo "ERROR generating your public/private keys"
+      return 1
+    fi
+    if [[ $# -ge 1 ]]; then
+      remote=$1
+      echo
+      echo "Now we will copy this key to the $remote."
+      echo "You will be asked for your USNA password (only once!)"
+      echo
+      read -n1 -p "Hit ENTER to continue." throwaway
+      ssh-copy-id -i "$pubkey" "$remote" || return 1
+    fi
+  fi
+  return 0
+}
+
+# Downloads the tarball of files to check
+# no arguments necessary
+function dltarball {
+  # make temp directory for tarball
+  tdir="$scratch/tardir"
+  mkdir "$tdir"
+  cd "$tdir"
+  echo "Downloading updated files..."
+  curl -sf "$tarball_url" > "files.tgz" || return 1
+  tar xzf "files.tgz" || return 1
+  sumsfile="$(pwd)/checksums"
+  skeldir="$(pwd)/skel"
+  if ! [[ -e $sumsfile && -d $skeldir ]]; then
+    echo "ERROR: Malformed tarball"
+    return 1
+  fi
+  echo "done downloading files"
+  return 0
+}
+
+# remove old scripts
+function remold {
+  if [[ -e "$HOME/bin/csmount" ]]; then
+    pushd "$HOME"/bin >/dev/null
+    for f in csunixmount csunixmountbyname csunixunmount; do
+      [[ -e $f ]] && rm -v "$f"
+    done
+  fi
+}
+
+# fix the purple terminal background
+function termcolors {
+  # get profile name
+  tprof="/org/gnome/terminal/legacy/profiles:/"
+  tprof+=$(dconf list $tprof | head -1l)
+  usetheme=$(dconf read "${tprof}use-theme-colors")
+  if [[ -z $usetheme || $usetheme = "true" ]]; then
+    echo
+    echo "Setting terminal colors to black on light yellow"
+    dconf write "${tprof}foreground-color" "'rgb(0,0,0)'"
+    dconf write "${tprof}background-color" "'rgb(255,255,221)'"
+    dconf write "${tprof}use-theme-colors" "false"
+    echo
+  fi
+}
+
+# turn off power management in the VM
+function powerman {
+  echo
+  echo "Disabling power management"
+  gsettings set org.gnome.settings-daemon.plugins.power active false
+  dconf write /org/gnome/desktop/session/idle-delay "uint32 0"
+  dconf write /org/gnome/desktop/screensaver/lock-enabled "false"
+  echo
+}
+
+# add launchers to the top panel
+function launchers {
+  if [[ ${#tolaunch} -ge 1 ]]; then
+    echo
+    echo "Checking launchers"
+    for app in "${tolaunch[@]}"; do
+      found=false
+      maxind=1
+
+      # go through current launchers
+      exec 4< <(dconf list /org/gnome/gnome-panel/layout/objects/)
+      while read -u4 lname; do
+        if [[ ${lname%/} = $app ]]; then
+          found=true
+          break
+        fi
+        ind=$(dconf read /org/gnome/gnome-panel/layout/objects/${lname}pack-index) || continue
+        [[ $ind -ge $maxind ]] && maxind=$(( ind + 1 ))
+      done
+
+      # skip if the launcher is alrady there
+      $found && continue
+
+      # get the launcher file
+      appfile="/usr/share/applications/$app.desktop"
+      if [[ ! -e $appfile ]]; then
+        echo "ERROR: couldn't find .desktop file for $app; skipping"
+      fi
+
+      # add launcher to dconf
+      dconf load /org/gnome/gnome-panel/layout/objects/$app/ <<EOT
+[/]
+pack-type='start'
+toplevel-id='top-panel'
+pack-index=$maxind
+object-iid='PanelInternalFactory::Launcher'
+
+[instance-config]
+location='$appfile'
+EOT
+      lst=$(dconf read /org/gnome/gnome-panel/layout/object-id-list)
+      lst="${lst%]}, '$app']"
+      dconf write /org/gnome/gnome-panel/layout/object-id-list "$lst"
+
+      echo "  Added panel launcher for $app"
+    done
+    echo "done with launchers"
+  fi
+  return 0
+}
+
+# set up windows terminal configuration
+function winterm {
+  if [[ $hosttype != wsl ]]; then
+    echo
+    echo "ERROR: can only set windows terminal config for WSL. Something went wrong."
+    echo
+    return 1
+  fi
+  winhome=$(cd /mnt/c/Windows/System32 && ./cmd.exe /c 'echo %HOMEPATH%' | tr -d '\r')
+  winhome="/mnt/c${winhome//\\//}"
+  termhome=$(find "$winhome/AppData/Local/Packages" -maxdepth 1 -type d -name 'Microsoft.WindowsTerminal*' | head -1l)
+  if [[ ! -d $termhome ]]; then
+    echo
+    echo "ERROR: Couldn't find AppData folder for Microsoft Windows Terminal"
+    echo "Double-check that you installed Windows Terminal from the Microsoft store."
+    echo
+    return 1
+  fi
+  setfile="$termhome/LocalState/settings.json"
+  if [[ ! -e $setfile ]]; then
+    echo
+    echo "ERROR: Couldn't find settings.json for Microsoft Windows Terminal"
+    echo "Double-check that you installed Windows Terminal from the Microsoft store."
+    echo
+    return 1
+  fi
+
+  echo
+  echo "Checking Windows Terminal Settings..."
+
+  cp "$setfile" "$scratch/settings.json5"
+  json5 -c "$scratch/settings.json5"
+
+  python3 >"$scratch/settings2.json" <<EOF
+import json
+import sys
+
+def getormake(d, k, v):
+    try:
+        return d[k]
+    except KeyError:
+        d[k] = v
+        return v
+
+def setifnot(d, k, v):
+    if k not in d:
+        d[k] = v
+
+def main(fname, home):
+    with open(fname) as r:
+        top = json.load(r)
+
+    profiles = getormake(top, 'profiles', {})
+    plist = getormake(profiles, 'list', [])
+
+    found = False
+    for entry in plist:
+        if 'guid' in entry and 'Ubuntu' in entry.get('name',''):
+            found = True
+            break
+
+    if found:
+      setifnot(entry, 'startingDirectory', '//wsl$/' + entry['name'] + home)
+      setifnot(entry, 'colorScheme', 'One Half Dark')
+      setifnot(entry, 'cursorShape', 'filledBox')
+      entry['hidden'] = False
+
+      top['defaultProfile'] = entry['guid']
+      plist.remove(entry)
+      plist.insert(0, entry)
+
+    top['copyOnSelect'] = True
+
+    print(json.dumps(top, indent=4))
+
+main('$scratch/settings.json', '$HOME')
+EOF
+
+  if ! cmp -s "$scratch/settings.json" "$scratch/settings2.json"; then
+    echo "Applying changes to settings.json for Windows Terminal"
+    if grep -q "initially generated by Windows" "$setfile"; then
+      cp "$setfile" "$setfile.orig"
+    fi
+    cp "$scratch/settings2.json" "$setfile"
+  fi
+  echo
+  return 0
+}
+
+# disable dpi scaling in VcXsrv, because the native Ubuntu
+# apps will scale themselves and look way better.
+# (only applies to WSL)
+function hidpi_vcxsrv {
+  if [[ $hosttype != wsl ]]; then
+    echo
+    echo "ERROR: can only set windows terminal config for WSL. Something went wrong."
+    echo
+    return 1
+  fi
+  cd /mnt/c/Windows/System32
+  ./reg.exe ADD 'HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers' /v 'C:\Program Files\VcXsrv\vcxsrv.exe' /d '~ HIGHDPIAWARE' /f >/dev/null
+  ./reg.exe ADD 'HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers' /v 'C:\Program Files\VcXsrv\xlaunch.exe' /d '~ HIGHDPIAWARE' /f >/dev/null
+  return 0
+}
+
+# For WSL, checks the C drive mount uses the "metadata" option...
+function wsl_mount {
+  cd
+  if ! grep -q '^C:.*\<metadata\>' /etc/mtab; then
+    echo
+    echo "Remounting /mnt/c with metadata option..."
+    echo "(You may be asked for your Ubuntu password.)"
+    sudo umount /mnt/c || return 1
+    sleep 2s # dirty...
+    sudo mount -t drvfs -o metadata C: /mnt/c || return 1
+    echo "successfully remounted"
+  fi
+  wslconf=/etc/wsl.conf
+  sudo touch "$wslconf" && sudo chmod a+r "$wslconf" || return 1
+  if [[ ! -e $wslconf ]] || ! grep -q metadata "$wslconf"; then
+    echo
+    echo "Adding metadata option to $wslconf..."
+    sudo tee -a "$wslconf" >/dev/null <<EOF
+[automount]
+options = "metadata"
+EOF
+    sudo chmod a+r "$wslconf" || return 1
+    echo "$wslconf fixed!"
+  fi
+  return 0
+}
+
+# checks an existing si204 dir
+# returns 0 if the directory doesn't exist, is good, or the user agrees to move it
+# otherwise (not good and they refuse to move it) returns 1
+function check_existing_dir {
+  d=$1
+  if [[ -e $d ]]; then
+    if [[ -d $d && -d "$d/.git" ]]; then
+      # it's a git repository
+      return 0
+    else
+      # exists but isn't a git repo
+      echo
+      newd="${d}_old"
+      i=0
+      while [[ -e $newd && $i -lt 100 ]]; do
+        : $(( i++ ))
+        newd="${d}_old$i"
+      done
+      if [[ -e $newd ]]; then
+        echo "Something weird is going on - do you really have 100 $d directories?"
+        return 1
+      fi
+      echo "You have another file or folder where your si204 directory should be."
+      yn=''
+      while [[ ! $yn =~ [yn] ]]; do
+        read -p "Is it OK to move $(readlink -f "$d") to \"$newd\"? [Y/n]" yn
+        [[ -n $yn ]] && yn=${yn,,} || yn=y
+      done
+      if [[ $yn == y ]]; then
+        mv "$d" "$newd"
+        return 0
+      else
+        return 1
+      fi
+    fi
+  else
+    # doesn't exist
+    return 0
+  fi
+}
+
+# set up symlinks in wsl
+function wsldirs {
+  cd
+  winuser=$(cd /mnt/c/Windows/System32 && ./cmd.exe /c 'echo %USERNAME%' | tr -d '\r')
+  for f in Desktop Documents Downloads; do
+    if [[ ! -e $f ]]; then
+      of="/mnt/c/Users/$winuser/$f"
+      if [[ -e $of ]]; then
+        ln -s "$of" "$f"
+      elif [[ $f == Desktop ]]; then
+        echo
+        echo "ERROR: Can't find your desktop directory to link to"
+        echo "Could be a mounting problem. Try restarting and run it again."
+        echo
+        return 1
+      fi
+    fi
+  done
+  return 0
+}
+
+# clone the si204 starter code git repo
+function clonegit {
+  cd
+  check_existing_dir si204 || return 1
+  cd
+  [[ -e si204 ]] && return 0 # must be good if it passed check
+  echo
+  echo "Creating si204 directory..."
+  if [[ $hosttype == 'wsl' ]]; then
+    if [[ ! -e Desktop ]]; then
+      echo "ERROR: no Desktop link in WSL."
+      return 1
+    fi
+    cd Desktop
+    check_existing_dir si204 || return 1
+  fi
+  if [[ $hosttype == 'wsl' ]]; then
+    cd
+    ln -s "$(realpath Desktop/si204)" si204
+  fi
+  return 0
+}
+
+# ensures that the bashrc sources the 204bash.sh file
+function fixbashrc {
+  cd
+  if ! grep -q extra_bashrc .bashrc; then
+    echo
+    echo "Adding extra_bashrc.sh to the end of .bashrc"
+    exec 4>>.bashrc
+    echo >&4
+    echo "# Extra spicy bashrc brought to you by Dr. Roche" >&4
+    echo "source ~/bin/extra_bashrc.sh" >&4
+    exec 4>&-
+  fi
+  if ! grep -q 204bash .bashrc; then
+    echo
+    echo "Adding 204bash.sh to the end of .bashrc"
+    exec 4>>.bashrc
+    echo >&4
+    echo "# SI204 fall 2020 setup script" >&4
+    echo "source ~/bin/204bash.sh" >&4
+    exec 4>&-
+  fi
+  echo
+  return 0
+}
+
+# creates a private fork of the si204 directory in your own github account
+function makegit {
+  cd
+  if ! check_existing_dir si204 || [[ ! -d si204 ]]; then
+    echo
+    echo "WARNING: can't add your private si204 repo because"
+    echo "the si204 directory doesn't exist."
+    echo "Probably there was an error with a previous part of the setup."
+    echo
+    return 1
+  fi
+
+  cd si204
+
+  if ! git config user.email >/dev/null || ! git config user.name >/dev/null; then
+    echo
+    echo "In order to sync your files with git, the program will attach your name"
+    echo "and email address with each change you make."
+    echo
+    read -p "Please confirm your email address: " -e -i "$USER@usna.edu" email
+    read -p "Please enter your name (first and last): " -e name
+    git config --global user.email "$email"
+    git config --global user.name "$name"
+  fi
+
+  if git remote | grep -q "^origin$"; then
+    # looks like it's already setup
+    return 0
+  fi
+
+  if ! oat=$(get_github_oauth); then
+    return 1
+  fi
+
+  echo "Getting github username"
+  if ! ghuser=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' 'https://api.github.com/user' | jq -r -e '.login'); then
+    echo "ERROR connecting to github. Maybe the code was bad, or you"
+    echo "are no longer connected to the internet?"
+    return 1
+  fi
+
+  if [[ -e $pubkey ]]; then
+    echo "Adding your ssh key to github"
+    mkdir -p --mode=700 "$HOME/.ssh"
+    sshconf="$HOME/.ssh/config"
+    touch "$sshconf"
+    sk=$(readlink -f "$prikey")
+    if ! grep -q "$sk" "$sshconf"; then
+      exec 5>>"$sshconf"
+      echo "Host github.com" >&5
+      echo "  user git" >&5
+      echo "  forwardx11 no" >&5
+      echo "  identityfile $sk" >&5
+      exec 5>&-
+    fi
+    if ! curl -s -f -X POST -H "Authorization: token $oat" -d "{\"title\":\"204setup $hosttype\",\"key\":\"$(cat "$pubkey")\"}" 'https://api.github.com/user/keys' >/dev/null; then
+      echo "WARNING: error adding public key to github"
+    fi
+  else
+    echo "WARNING: no public key found"
+  fi
+
+  reponame="$ghuser/si204"
+  if ! ispri=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' "https://api.github.com/repos/$reponame" | jq -e -r '.private'); then
+    echo "Creating your private repo $reponame"
+    if ! reponame=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' 'https://api.github.com/user/repos' -d "{\"name\":\"si204\",\"private\":true}" | jq -e -r '.full_name'); then
+      echo "ERROR creating $ghuser/si204"
+      return 1
+    fi
+  elif [[ $ispri == 'false' ]]; then
+    echo "ERROR: $reponame repo is not private"
+    return 1
+  fi
+
+  echo "Connecting your private repo to your si204 directory"
+  git remote add origin "git@github.com:$reponame"
+  git pull origin master || true
+  git push -u origin master
+  echo
+  return 0
+}
+
+
+####### BEGIN ACTUAL SCRIPT ###############
+
+allpass=true
+
+if $checknew; then
+  echo "Checking for new version of setup script"
+  dlscript="$scratch/dlscript.sh"
+  if curl -sf "$dl_url/204setup" >$dlscript; then
+    if ! cmp -s "$dlscript" "$scname"; then
+      echo "Setup script has been updated; replacing and starting over..."
+      chmod +x "$dlscript"
+      exitval=0
+      "$dlscript" r "$@" || exitval=$errexit
+      mv "$dlscript" "$scname"
+      exit $exitval
+    fi
+  else
+    echo "ERROR: couldn't download setup script. Continuing anyway..."
+  fi
+  echo
+fi
+
+if ! getpacks "${base_pkgs[@]}"; then
+  echo
+  echo "ERROR installing the basic packages needed to run this command"
+  echo "We have to quit. Check your internet connection!"
+  exit $errexit
+fi
+
+
+if [[ $hosttype == 'wsl' ]]; then
+  if [[ -z $arg || $arg =~ w ]]; then
+    if ! wsldirs; then
+      echo
+      echo "ERROR setting up symbolic links to your Windows desktop in WSL."
+      echo "Contact your instructor or MGSP leader."
+      read -n1 -p "Hit ENTER to continue"
+      echo
+      allpass=false
+    fi
+  fi
+fi
+
+if [[ -z $arg || $arg =~ k ]]; then
+  if [[ $hosttype == 'vm' ]]; then
+    if ! sshkey $midnserver; then
+      echo
+      echo "ERROR generating public/private key pair"
+      echo "to allow passwordless ssh to csmidn."
+      echo "This isn't a major problem; let's move on."
+      read -n1 -p "Hit ENTER to continue"
+      echo
+      allpass=false
+    fi
+  else
+    # make an ssh key, but don't copy to any server
+    if ! sshkey; then
+      echo
+      echo "ERROR generating public/private key pair."
+      echo "This isn't a major problem; let's move on."
+      read -n1 -p "Hit ENTER to continue"
+      allpass=false
+      echo
+    fi
+  fi
+fi
+
+if [[ $hosttype == 'wsl' ]]; then
+  wsl_mount || true
+fi
+
+if [[ -z $arg || $arg =~ g ]]; then
+  if ! clonegit || ! makegit ; then
+    echo
+    echo "ERROR getting your si204 git directory."
+    echo "You will need this to get the files for your various"
+    echo "homeworks, labs, and projects."
+    read -n1 -p "Hit ENTER to continue"
+    allpass=false
+    echo
+  fi
+fi
+
+if [[ -z $arg || $arg =~ f ]]; then
+  if ! dltarball; then
+    echo
+    echo "ERROR downloading files tarball."
+    echo "Make sure you're connected to the internet and then try re-running."
+    exit $errexit
+  fi
+
+  if ! checkall "$HOME" "$skeldir" "$sumsfile"; then
+    echo
+    echo "ERROR checking files in your home directory."
+    echo "You should report this to your instructor."
+    echo "We'll soldier on for now."
+    read -n1 -p "Hit ENTER to continue"
+    echo
+    allpass=false
+  fi
+
+  remold || true
+fi
+
+if [[ -z $arg || $arg =~ b ]]; then
+  fixbashrc || true
+fi
+
+if [[ -z $arg || $arg =~ a ]]; then
+  if [[ $hosttype == 'vm' ]]; then
+    termcolors || true
+    powerman || true
+    launchers || true
+  elif [[ $hosttype == 'wsl' ]]; then
+    winterm || true
+    hidpi_vcxsrv || true
+  else
+    termcolors || true
+  fi
+  echo
+fi
+
+if [[ $hosttype == 'vm' ]]; then
+  if [[ -z $arg || $arg =~ f ]]; then
+    # try mounting csunix and checking files there too
+    csm="$HOME/bin/csmount"
+    if [[ -x $csm ]] && "$csm"; then
+      set +e # ignore failures here
+      checkall "$HOME/csunix" "$skeldir" "$sumsfile"
+      "$HOME/bin/csunmount"
+      set -e
+    fi
+  fi
+fi
+
+# only install software on vm or wsl
+if [[ $hosttype == 'vm' || $hosttype == 'wsl' ]]; then
+  if [[ -z $arg || $arg =~ i ]]; then
+    if ! getpacks "${extra_pkgs[@]}"; then
+      echo
+      echo "ERROR installing packages."
+      echo "Maybe you're not connected to the Internet?"
+      echo "We'll ignore that for now and just move on."
+      echo "Talk to your instructor if you're not sure what happened."
+      read -n1 -p "Hit ENTER to continue"
+      echo
+      allpass=false
+    else
+      sudo apt update && sudo apt full-upgrade -y && sudo apt autoremove -y || true
+      echo
+    fi
+  fi
+fi
+
+if $allpass; then
+  echo
+  echo "Success! If you just ran this in the default Ubuntu terminal,"
+  echo "you should close it and open a fresh Windows Terminal tab for Ubuntu."
+  echo "Good luck in the class this semester!"
+  exit 0
+else
+  echo
+  echo "Some of the setup components did not complete successfully."
+  echo "You can try running the script again at any time."
+  echo "Please contact your instructor or MGSP if you can't get it to work."
+  exit $errexit
+fi
