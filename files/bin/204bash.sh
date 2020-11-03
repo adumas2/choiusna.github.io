@@ -32,11 +32,11 @@ function 204sync {
     fi
     echo
     echo "Getting updates from your repo"
-    echo git pull origin master
-    git pull origin master
+    echo git pull 
+    git pull
     echo
     echo "Copying your work to your repo"
-    echo git push -u origin master
-    git push -u origin master
+    echo git push
+    git push
   )
 }
