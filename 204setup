@@ -26,14 +26,8 @@ extra_pkgs=(clang bash-doc trash-cli moreutils gcc g++ gitk vim-gtk3 emacs valgr
 # each should corespond to a /usr/share/applications/XXX.desktop file
 tolaunch=(gnome-terminal google-chrome gvim emacs24 atom gedit)
 
-# I shouldn't say what this is.
-cs2='5fded64ff49569d1a5f'
-cs1='1ea69bcca39e02f99621d'
-
-# tarball structure:
-# /checksums    file with md5 checksums for OLD versions
-# /skel/        folder containing the actual files
-tarball_url="$dl_url/files.tar"
+# tarball 
+tarball_url="$dl_url/files.tgz"
 
 # make temp dir and remember to remove it
 scratch=$(mktemp --directory --tmpdir 204setup.XXXXXXXX)
@@ -52,6 +46,7 @@ else
 fi
 
 checknew=true # by default, check for new versions of this script
+
 errexit=1 # by default, exit with 1 on error
 if [[ $# -ge 1 && $1 == d ]]; then
   echo "Script successfully downloaded"
@@ -87,31 +82,14 @@ fi
 scname=$(readlink -f "$0")
 chmod +x "$scname"
 
-# usage: checkfile filename homedir skeldir sumsfile
+# usage: checkfile filename homedir skeldir 
 # checks a single file and copies it if necessary
 function checkfile {
   filename=$1
   homedir=$2
   skeldir=$3
-  sumsfile=$4
-  copyit=false
+  copyit=true
   pushd "$homedir" >/dev/null
-  if [[ ! -e $filename ]]; then
-    # if the file doesn't exist, always copy it
-    copyit=true
-  elif ! cmp -s "$filename" "$skeldir/$filename"; then
-    # if the file exists and is different than the downloaded version...
-    sumline=$(md5sum "$filename")
-    if grep -qFx "$sumline" "$sumsfile"; then
-      # if the existing version is in the checksums file, overwrite it
-      copyit=true
-    else
-      # otherwise, don't do it
-      echo "  warning: not overwriting $filename; maybe you changed it yourself?"
-      echo "           (if you want the new version, delete $filename and then re-run this command.)"
-      copyit=false
-    fi
-  fi
   if $copyit; then
     echo "  copying file $filename"
     mkdir -p "$(dirname "$filename")"
@@ -157,18 +135,17 @@ function getpacks {
   return 0
 }
 
-# usage: checkall homedir skeldir sumsfile
+# usage: checkall homedir skeldir 
 # runs checkfile for every file in skeldir
 function checkall {
   homedir=$1
   skeldir=$2
-  sumsfile=$3
   echo
   echo "Checking files for updates..."
   exec 4< <(find "$skeldir" -type f)
   while read -u4 fullname; do
     fname=${fullname#$skeldir/}
-    if ! checkfile "$fname" "$homedir" "$skeldir" "$sumsfile"; then
+    if ! checkfile "$fname" "$homedir" "$skeldir"; then
       echo "ERROR: some problem checking file $fname"
       echo "You should report this to your instructor!"
       echo "Soldiering on with the rest..."
@@ -218,9 +195,8 @@ function dltarball {
   echo "Downloading updated files..."
   curl -sf "$tarball_url" > "files.tgz" || return 1
   tar xzf "files.tgz" || return 1
-  sumsfile="$(pwd)/checksums"
-  skeldir="$(pwd)/skel"
-  if ! [[ -e $sumsfile && -d $skeldir ]]; then
+  skeldir="$(pwd)/files"
+  if ! [[ -d $skeldir ]]; then
     echo "ERROR: Malformed tarball"
     return 1
   fi
@@ -509,28 +485,8 @@ function wsldirs {
   return 0
 }
 
-# clone the si204 starter code git repo
-function clonegit {
-  cd
-  check_existing_dir si204 || return 1
-  cd
-  [[ -e si204 ]] && return 0 # must be good if it passed check
-  echo
-  echo "Creating si204 directory..."
-  if [[ $hosttype == 'wsl' ]]; then
-    if [[ ! -e Desktop ]]; then
-      echo "ERROR: no Desktop link in WSL."
-      return 1
-    fi
-    cd Desktop
-    check_existing_dir si204 || return 1
-  fi
-  if [[ $hosttype == 'wsl' ]]; then
-    cd
-    ln -s "$(realpath Desktop/si204)" si204
-  fi
-  return 0
-}
+
+
 
 # ensures that the bashrc sources the 204bash.sh file
 function fixbashrc {
@@ -560,42 +516,24 @@ function fixbashrc {
 # creates a private fork of the si204 directory in your own github account
 function makegit {
   cd
-  if ! check_existing_dir si204 || [[ ! -d si204 ]]; then
-    echo
-    echo "WARNING: can't add your private si204 repo because"
-    echo "the si204 directory doesn't exist."
-    echo "Probably there was an error with a previous part of the setup."
-    echo
-    return 1
-  fi
+  check_existing_dir si204 || return 1
+ 
+  cd
+  [[ -e si204 ]] && return 0 # must be good if it passed check
 
-  cd si204
 
-  if ! git config user.email >/dev/null || ! git config user.name >/dev/null; then
-    echo
-    echo "In order to sync your files with git, the program will attach your name"
-    echo "and email address with each change you make."
-    echo
-    read -p "Please confirm your email address: " -e -i "$USER@usna.edu" email
-    read -p "Please enter your name (first and last): " -e name
-    git config --global user.email "$email"
-    git config --global user.name "$name"
-  fi
+  if [[ $hosttype == 'wsl' ]]; then
+    if ! wsldirs; then
+      echo
+      echo "ERROR setting up symbolic links to your Windows desktop in WSL."
+      echo "Contact your instructor or MGSP leader."
+      read -n1 -p "Hit ENTER to continue"
+      echo
+      allpass=false
+    fi
 
-  if git remote | grep -q "^origin$"; then
-    # looks like it's already setup
-    return 0
-  fi
-
-  if ! oat=$(get_github_oauth); then
-    return 1
-  fi
-
-  echo "Getting github username"
-  if ! ghuser=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' 'https://api.github.com/user' | jq -r -e '.login'); then
-    echo "ERROR connecting to github. Maybe the code was bad, or you"
-    echo "are no longer connected to the internet?"
-    return 1
+    cd Desktop
+    check_existing_dir si204 || return 1
   fi
 
   if [[ -e $pubkey ]]; then
@@ -612,29 +550,54 @@ function makegit {
       echo "  identityfile $sk" >&5
       exec 5>&-
     fi
-    if ! curl -s -f -X POST -H "Authorization: token $oat" -d "{\"title\":\"204setup $hosttype\",\"key\":\"$(cat "$pubkey")\"}" 'https://api.github.com/user/keys' >/dev/null; then
-      echo "WARNING: error adding public key to github"
-    fi
   else
     echo "WARNING: no public key found"
   fi
+  read -p "[GitHub] Please confirm your email address: " -e -i "$USER@usna.edu" email
+  read -p "[GitHub] Please enter your name (first and last): " -e name
+  read -p "[GitHub] Please enter your username: " -e uname
+  git config --global user.email "$email"
+  git config --global user.name "$name"
 
-  reponame="$ghuser/si204"
-  if ! ispri=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' "https://api.github.com/repos/$reponame" | jq -e -r '.private'); then
-    echo "Creating your private repo $reponame"
-    if ! reponame=$(curl -s -f -H "Authorization: token $oat" -H 'Accept: application/json' 'https://api.github.com/user/repos' -d "{\"name\":\"si204\",\"private\":true}" | jq -e -r '.full_name'); then
-      echo "ERROR creating $ghuser/si204"
-      return 1
+  github_result=0
+  KEY_NAME="204setup"
+  until [ $github_result -eq 1 ]; do
+    curl --silent -u "$uname" --data "{\"title\":\"$KEY_NAME\",\"key\":\"$(cat $pubkey)\"}" https://api.github.com/user/keys > gh-result
+    if grep -q 'key is already in use' gh-result; then
+      github_result=1
+      echo 'Key is already in use.'
+    elif grep -q '"verified": true' gh-result; then
+      github_result=1
+      echo "Key ($KEY_NAME) has been added successfully."
+    elif grep -q 'Bad credentials' gh-result; then
+      echo 'Error during login: invalid username or password!'
+      echo 'Try again!'
+    else
+      echo 'A problem occured during the upload!'
+      cat gh-result
+      echo 'Try again!'
     fi
-  elif [[ $ispri == 'false' ]]; then
-    echo "ERROR: $reponame repo is not private"
+    rm gh-result
+  done 
+
+  reponame="$uname/si204"
+  git clone "git@github.com:$reponame"
+
+  if [[ $hosttype == 'wsl' ]]; then
+    cd
+    ln -s "$(realpath Desktop/si204)" si204
+  fi
+  
+  cd
+  if ! check_existing_dir si204 || [[ ! -d si204 ]]; then
+    echo
+    echo "WARNING: can't add your private si204 repo because"
+    echo "the si204 directory doesn't exist."
+    echo "Probably there was an error with a previous part of the setup."
+    echo
     return 1
   fi
 
-  echo "Connecting your private repo to your si204 directory"
-  git remote add origin "git@github.com:$reponame"
-  git pull origin master || true
-  git push -u origin master
   echo
   return 0
 }
@@ -712,10 +675,10 @@ if [[ $hosttype == 'wsl' ]]; then
 fi
 
 if [[ -z $arg || $arg =~ g ]]; then
-  if ! clonegit || ! makegit ; then
+  if ! makegit; then
     echo
     echo "ERROR getting your si204 git directory."
-    echo "You will need this to get the files for your various"
+    echo "You will need this to store the files for your various"
     echo "homeworks, labs, and projects."
     read -n1 -p "Hit ENTER to continue"
     allpass=false
@@ -731,7 +694,7 @@ if [[ -z $arg || $arg =~ f ]]; then
     exit $errexit
   fi
 
-  if ! checkall "$HOME" "$skeldir" "$sumsfile"; then
+  if ! checkall "$HOME" "$skeldir"; then
     echo
     echo "ERROR checking files in your home directory."
     echo "You should report this to your instructor."
@@ -768,7 +731,7 @@ if [[ $hosttype == 'vm' ]]; then
     csm="$HOME/bin/csmount"
     if [[ -x $csm ]] && "$csm"; then
       set +e # ignore failures here
-      checkall "$HOME/csunix" "$skeldir" "$sumsfile"
+      checkall "$HOME/csunix" "$skeldir" 
       "$HOME/bin/csunmount"
       set -e
     fi
