@@ -1,1 +1,1 @@
-echo "downloading setup script..." && mkdir -p ~/bin && curl -sf "https://choiusna.github.io/204begin" > ~/bin/204setup && bash ~/bin/204setup d || echo "ERROR in download - are you connected to the internet?"
+echo "downloading setup script..." && mkdir -p ~/bin && curl -sf "https://choiusna.github.io/204setup" > ~/bin/204setup && bash ~/bin/204setup d || echo "ERROR in download - are you connected to the internet?"
