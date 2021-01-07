@@ -648,10 +648,9 @@ fi
 
 if [[ -z $arg || $arg =~ k ]]; then
   if [[ $hosttype == 'vm' ]]; then
-    if ! sshkey $midnserver; then
+    if ! sshkey; then
       echo
       echo "ERROR generating public/private key pair"
-      echo "to allow passwordless ssh to csmidn."
       echo "This isn't a major problem; let's move on."
       read -n1 -p "Hit ENTER to continue"
       echo
