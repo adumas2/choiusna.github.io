@@ -554,31 +554,11 @@ function makegit {
     echo "WARNING: no public key found"
   fi
   read -p "[GitHub] Please confirm your email address: " -e -i "$USER@usna.edu" email
-  read -p "[GitHub] Please enter your name (first and last): " -e name
-  read -p "[GitHub] Please enter your username: " -e uname
   git config --global user.email "$email"
+  read -p "[GitHub] Please enter your username: " -e uname
   git config --global user.name "$name"
-
-  github_result=0
-  KEY_NAME="204setup"
-  until [ $github_result -eq 1 ]; do
-    curl --silent -u "$uname" --data "{\"title\":\"$KEY_NAME\",\"key\":\"$(cat $pubkey)\"}" https://api.github.com/user/keys > gh-result
-    if grep -q 'key is already in use' gh-result; then
-      github_result=1
-      echo 'Key is already in use.'
-    elif grep -q '"verified": true' gh-result; then
-      github_result=1
-      echo "Key ($KEY_NAME) has been added successfully."
-    elif grep -q 'Bad credentials' gh-result; then
-      echo 'Error during login: invalid username or password!'
-      echo 'Try again!'
-    else
-      echo 'A problem occured during the upload!'
-      cat gh-result
-      echo 'Try again!'
-    fi
-    rm gh-result
-  done 
+  echo "[GitHub] Follow the instructions and upload your public key to the github."
+  read -p "Press enter once you have uploaded the key."
 
   reponame="$uname/si204"
   git clone "git@github.com:$reponame"
