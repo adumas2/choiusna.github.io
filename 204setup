@@ -556,7 +556,7 @@ function makegit {
   read -p "[GitHub] Please confirm your email address: " -e -i "$USER@usna.edu" email
   git config --global user.email "$email"
   read -p "[GitHub] Please enter your username: " -e uname
-  git config --global user.name "$name"
+  git config --global user.name "$uname"
   echo "[GitHub] Follow the instructions and upload your public key to the github."
   read -p "Press enter once you have uploaded the key."
 
