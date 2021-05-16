@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+# it432 package setup script
+# Seung Geol Choi, May 2021 
+
+
+base_pkgs=(git jq curl coreutils diffutils dconf-cli openssh-client node-json5)
+extra_pkgs=(bash-doc moreutils gcc g++ gitk vim-gtk3 emacs valgrind gdb
+  x11-utils geany make lilyterm python3-pip net-tools atom)
+
+sudo apt install -y $base_pckgs
+sudo apt install -y $extra_pckgs
+
+
