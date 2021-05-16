@@ -4,10 +4,6 @@
 # Seung Geol Choi, May 2021 
 
 
-base_pkgs=(git jq curl coreutils diffutils dconf-cli openssh-client node-json5)
-extra_pkgs=(moreutils gcc g++ perl gitk gdb x11-utils make python3-pip net-tools atom)
-
-sudo apt install -y $base_pckgs
-sudo apt install -y $extra_pckgs
+sudo apt install -y git jq curl coreutils diffutils dconf-cli openssh-client node-json5 moreutils gcc g++ perl gitk gdb x11-utils make python3-pip net-tools atom
 
 pip3 install scapy pycryptodome
