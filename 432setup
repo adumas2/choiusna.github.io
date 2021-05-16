@@ -10,4 +10,4 @@ extra_pkgs=(moreutils gcc g++ perl gitk gdb x11-utils make python3-pip net-tools
 sudo apt install -y $base_pckgs
 sudo apt install -y $extra_pckgs
 
-
+pip3 install scapy pycryptodome
