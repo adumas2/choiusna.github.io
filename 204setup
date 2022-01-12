@@ -6,13 +6,14 @@
 # maximal SI204 enjoyment.
 # Dr. Roche, January 2017 and August 2020
 # Adapted by Dr. Choi, 2021
+# adapted for ic211
 
 set -euo pipefail
 shopt -s nullglob
 umask 066
 
 # must have this script and the tarball available under dl_url
-dl_url="https://choiusna.github.io"
+dl_url="https://adumas2/choiusna.github.io"
 
 # private key file for SSH authentication
 prikey="$HOME/.ssh/id_ed25519"
@@ -70,7 +71,7 @@ if [[ -n $arg && ! $arg =~ ^[swgfbaki]*$ ]]; then
   echo "Command can be blank to do everything, or a combination of:"
   echo "  w: set up symlink dirs for WSL"
   echo "  k: generate SSH keypair"
-  echo "  g: setup si204 git directory"
+  echo "  g: setup ic211 git directory"
   echo "  f: download files and check for updates"
   echo "  b: fix default bashrc"
   echo "  a: fix application options and launchers"
@@ -445,7 +446,7 @@ function check_existing_dir {
         echo "Something weird is going on - do you really have 100 $d directories?"
         return 1
       fi
-      echo "You have another file or folder where your si204 directory should be."
+      echo "You have another file or folder where your directory should be."
       yn=''
       while [[ ! $yn =~ [yn] ]]; do
         read -p "Is it OK to move $(readlink -f "$d") to \"$newd\"? [Y/n]" yn
@@ -516,10 +517,10 @@ function fixbashrc {
 # creates a private fork of the si204 directory in your own github account
 function makegit {
   cd
-  check_existing_dir si204 || return 1
+  check_existing_dir ic211 || return 1
  
   cd
-  [[ -e si204 ]] && return 0 # must be good if it passed check
+  [[ -e ic211 ]] && return 0 # must be good if it passed check
 
 
   if [[ $hosttype == 'wsl' ]]; then
@@ -533,7 +534,7 @@ function makegit {
     fi
 
     cd Desktop
-    check_existing_dir si204 || return 1
+    check_existing_dir ic211 || return 1
   fi
 
   if [[ -e $pubkey ]]; then
@@ -560,19 +561,19 @@ function makegit {
   echo "[GitHub] Follow the instructions and upload your public key to the github."
   read -p "Press enter once you have uploaded the key."
 
-  reponame="$uname/si204"
+  reponame="$uname/ic211"
   git clone "git@github.com:$reponame"
 
   if [[ $hosttype == 'wsl' ]]; then
     cd
-    ln -s "$(realpath Desktop/si204)" si204
+    ln -s "$(realpath Desktop/ic211)" ic211
   fi
   
   cd
-  if ! check_existing_dir si204 || [[ ! -d si204 ]]; then
+  if ! check_existing_dir ic211 || [[ ! -d ic211 ]]; then
     echo
-    echo "WARNING: can't add your private si204 repo because"
-    echo "the si204 directory doesn't exist."
+    echo "WARNING: can't add your private ic211 repo because"
+    echo "the ic211 directory doesn't exist."
     echo "Probably there was an error with a previous part of the setup."
     echo
     return 1
@@ -656,7 +657,7 @@ fi
 if [[ -z $arg || $arg =~ g ]]; then
   if ! makegit; then
     echo
-    echo "ERROR getting your si204 git directory."
+    echo "ERROR getting your ic211 git directory."
     echo "You will need this to store the files for your various"
     echo "homeworks, labs, and projects."
     read -n1 -p "Hit ENTER to continue"
